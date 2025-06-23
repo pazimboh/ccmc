@@ -119,20 +119,35 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
 
   const handleTestInsert = async () => { // Keeping this for sanity checks if needed
     console.log("Attempting direct Supabase test insert...");
-    if (!user || !account) {
-      console.error("Test Insert: User or account missing");
-      alert("Test Insert: User or account missing. Cannot perform test.");
+    if (!user || !account) { // user from useAuth() might be slightly stale, but account must be present
+      console.error("Test Insert: Account prop missing");
+      alert("Test Insert: Account prop missing. Cannot perform test.");
       return;
     }
     try {
+      const { data: { user: currentUserForTest }, error: userCheckError } = await supabase.auth.getUser();
+      console.log('Current user for test insert:', currentUserForTest, 'User Check Error:', userCheckError);
+
+      if (userCheckError || !currentUserForTest) {
+        alert('Cannot get current user before test insert. Aborting. Error: ' + (userCheckError?.message || 'No current user'));
+        console.error("Test Insert: Failed to get current user", userCheckError);
+        return;
+      }
+      // Optional: Compare context user with freshly fetched user if needed
+      // if (user?.id !== currentUserForTest.id) {
+      //     console.warn('User context mismatch during test insert. Context user:', user?.id, 'Fetched user:', currentUserForTest.id);
+      //     // Decide if this is critical enough to stop, or proceed with currentUserForTest.id
+      // }
+
       const { data: testData, error: testError } = await supabase.from('deposits').insert({
-        user_id: user.id,
+        user_id: currentUserForTest.id, // Use freshly fetched user ID
         account_id: account.id,
         amount: 1.00,
-        reference_number: `TESTDIRECT-${Date.now()}-${Math.random().toString(36).substring(2,7)}`,
+        reference_number: `TESTDIRECT-${Date.now()}-${Math.random().toString(36).substring(2,9).toUpperCase()}`, // slightly more unique
         description: "Direct Supabase Client Test from Modal",
         currency: account.currency || 'FCFA',
-      }).select();
+        // status will default to 'pending' as per DB schema for deposits
+      }); // .select() REMOVED
 
       if (testError) {
         console.error('Direct Supabase Test Insert ERROR:', testError);
