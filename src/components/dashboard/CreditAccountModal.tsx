@@ -56,7 +56,7 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
   } = useForm<CreditAccountFormData>({
     resolver: zodResolver(creditAccountSchema),
     defaultValues: {
-      amount: undefined,
+      amount: '', // Initialize with an empty string
       description: "",
     },
   });
