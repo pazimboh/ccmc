@@ -93,7 +93,8 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
 
       // Added .select() - this might help surface errors or ensure operation completion.
       // If RLS prevents select, it might also cause an error if insert itself was fine.
-      const { error } = await supabase.from("deposits").insert([depositPayload]).select();
+      // Temporarily removing .select() for debugging RLS on INSERT vs SELECT
+      const { error } = await supabase.from("deposits").insert([depositPayload]);
 
       console.log("Supabase insert response - error:", error); // Added this log
 
