@@ -1,6 +1,7 @@
 
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { setLocalLoginAttemptFlag } from "@/contexts/AuthContext"; // Import the new flag setter
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,8 +22,8 @@ const Login = () => {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
-    localStorage.setItem('isLoggingIn', 'true'); // Set flag before sign-in attempt
+    setLocalLoginAttemptFlag(true); // Set module-level flag
+    setIsLoading(true); // Component's own loading state
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -109,7 +110,9 @@ const Login = () => {
       });
     } finally {
       setIsLoading(false);
-       localStorage.removeItem('isLoggingIn'); // Clear flag after all operations
+       // AuthContext will also set this to false after its sync if login was successful.
+       // Setting it here ensures it's false if login fails before AuthContext's involvement.
+       setLocalLoginAttemptFlag(false);
     }
   };
 
