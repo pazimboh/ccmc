@@ -70,59 +70,62 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
     }
   }, [open, account, reset]);
 
-
-  const onSubmit = async (data: CreditAccountFormData) => {
+  const onSubmit = (data: CreditAccountFormData) => { // Removed async here for now
     if (!user || !account) {
       toast({ title: "Error", description: "User or account information is missing.", variant: "destructive" });
       return;
     }
     setIsSubmitting(true);
+    console.log("FORM DATA:", data);
 
-    try {
-      const depositPayload = {
-        user_id: user.id,
-        account_id: account.id,
-        amount: data.amount,
-        currency: account.currency || 'FCFA', // Use account's currency or default
-        description: data.description,
-        reference_number: generateReferenceNumber(), // Ensure this is unique
-        status: 'pending',
-        // deposit_method, receipt_url, admin_notes can be added if needed
-      };
-      console.log("Submitting deposit payload:", depositPayload); // Added this log
+    const minimalDepositPayload = {
+      user_id: user.id,
+      account_id: account.id,
+      amount: data.amount, // Ensure this is a number
+      reference_number: `TESTREF-${Date.now()}`, // Simplified reference
+      // status: 'pending', // Rely on DB default if possible for this test
+      description: data.description || "Test deposit"
+    };
+    console.log("MINIMAL Submitting deposit payload:", minimalDepositPayload);
 
-      // Added .select() - this might help surface errors or ensure operation completion.
-      // If RLS prevents select, it might also cause an error if insert itself was fine.
-      // Temporarily removing .select() for debugging RLS on INSERT vs SELECT
-      const { error } = await supabase.from("deposits").insert([depositPayload]);
+    supabase
+      .from("deposits")
+      .insert([minimalDepositPayload])
+      .then(({ data: insertData, error: insertError }) => {
+        console.log("Supabase INSERT THEN block reached.");
+        console.log("Insert Data:", insertData);
+        console.log("Insert Error:", insertError);
 
-      console.log("Supabase insert response - error:", error); // Added this log
-
-      if (error) {
-        console.error("Supabase insert error object:", error); // Log the full error object
-        throw error; // This will be caught by the catch block below
-      }
-
-      // If no error, proceed to toast and cleanup
-      toast({
-        title: "Credit Request Submitted",
-        description: "Your request to credit the account is pending admin approval.",
+        if (insertError) {
+          console.error("Supabase insert detailed error:", insertError);
+          toast({
+            title: "Supabase Error",
+            description: insertError.message || "Failed to submit deposit due to database error.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Credit Request Submitted (Simplified)",
+            description: "Your request is being processed.",
+          });
+          reset();
+          onOpenChange(false);
+          onCreditRequestSubmitted();
+        }
+      })
+      .catch((catchError: any) => {
+        // This catches errors from the promise chain itself (e.g., network errors before Supabase responds)
+        console.error("Supabase CATCH block error:", catchError);
+        toast({
+          title: "Submission Failed (Catch)",
+          description: catchError.message || "An unexpected error occurred during submission.",
+          variant: "destructive",
+        });
+      })
+      .finally(() => {
+        console.log("FINALLY block reached. Setting isSubmitting to false.");
+        setIsSubmitting(false);
       });
-      reset();
-      onOpenChange(false);
-      onCreditRequestSubmitted();
-    } catch (error: any) {
-      console.error("Error submitting credit request:", error);
-      toast({
-        title: "Error Submitting Request",
-        description: error.message || "Could not submit your credit request. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-       // This should always run, if it's not, the promise from try might be hanging
-       console.log("Setting isSubmitting to false in finally block");
-      setIsSubmitting(false);
-    }
   };
 
   if (!account) return null; // Don't render if no account is provided
