@@ -17,7 +17,7 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { refreshUserData } = useAuth(); // Keep refreshUserData for now
+  // const { refreshUserData } = useAuth(); // No longer calling refreshUserData directly from here
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,9 +59,9 @@ const Login = () => {
         if (roleError) console.error('Error fetching role for localStorage:', roleError.message);
         if (roleData) localStorage.setItem('userRole', JSON.stringify(roleData));
 
-        // Call refreshUserData from AuthContext to update its internal state if still used elsewhere
-        // This part might be removed if AuthContext is fully deprecated
-        await refreshUserData();
+        // Removed: await refreshUserData();
+        // AuthContext will rely on its onAuthStateChange or initial load from localStorage.
+        // The necessary items are already in localStorage for ProtectedRoute/GuestRoute.
 
         toast({
           title: "Login Successful",
