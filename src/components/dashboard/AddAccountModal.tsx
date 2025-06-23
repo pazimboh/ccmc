@@ -74,13 +74,20 @@ export function AddAccountModal({ open, onOpenChange, onAccountAdded }: AddAccou
     setIsSubmitting(true);
 
     try {
+      // Fetch fresh user session info before the insert
+      const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+      if (userError || !currentUser) {
+        console.error("Error fetching current user for new account:", userError);
+        toast({ title: "Session Error", description: "Could not verify user session. Please try again.", variant: "destructive" });
+        setIsSubmitting(false);
+        return;
+      }
+
       const newAccountNumber = generateAccountNumber();
-      // IMPORTANT: Assuming 'account_status' column with 'pending_approval' state exists or will be added.
-      // And that new accounts should default to this pending status.
-      // If the table default isn't 'pending_approval', explicitly set it here.
+      // IMPORTANT: Relies on schema modification for 'accounts.account_status' to allow 'pending_approval'
       const { error } = await supabase.from("accounts").insert([
         {
-          user_id: user.id, // In your schema, it's user_id, not customer_id for accounts table
+          user_id: currentUser.id, // Use ID from freshly fetched user
           account_name: data.account_name,
           account_type: data.account_type,
           account_number: newAccountNumber,

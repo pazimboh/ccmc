@@ -36,12 +36,12 @@ interface CreditAccountModalProps {
   onCreditRequestSubmitted: () => void;
 }
 
-// Using the more unique reference number generation
 function generateModalReferenceNumber(): string {
   return `DEP-MOD-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
 }
 
 export function CreditAccountModal({ open, onOpenChange, account, onCreditRequestSubmitted }: CreditAccountModalProps) {
+  // user from useAuth() is used for initial checks, but a fresh one is fetched for the actual insert.
   const { user } = useAuth();
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -68,33 +68,42 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
   }, [open, account, reset]);
 
   const onSubmit = async (data: CreditAccountFormData) => {
-    if (!user || !account) {
+    if (!user || !account) { // Initial check with context user
       toast({ title: "Error", description: "User or account information is missing.", variant: "destructive" });
       return;
     }
     setIsSubmitting(true);
-    console.log("Form submitted. Data:", data);
-    console.log("Type of data.amount:", typeof data.amount, "Value:", data.amount);
+    console.log("Credit Account Form submitted. Data:", data);
 
     try {
+      // Fetch fresh user session info before the insert
+      const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+      if (userError || !currentUser) {
+        console.error("Error fetching current user for deposit:", userError);
+        toast({ title: "Session Error", description: "Could not verify user session. Please try again.", variant: "destructive" });
+        setIsSubmitting(false);
+        return;
+      }
+
       const depositPayload = {
-        user_id: user.id,
+        user_id: currentUser.id, // Use ID from freshly fetched user
         account_id: account.id,
-        amount: Number(data.amount), // Ensure it's a number, though Zod coerce should handle it
+        amount: Number(data.amount),
         currency: account.currency || 'FCFA',
-        description: data.description || "", // Send empty string if undefined/null
+        description: data.description || "",
         reference_number: generateModalReferenceNumber(),
         // status: 'pending', // Relying on DB default for 'deposits' table
       };
       console.log("Submitting deposit payload to Supabase:", depositPayload);
 
-      const { error } = await supabase.from("deposits").insert([depositPayload]).select(); // Keep .select() for now
+      const { error: insertError } = await supabase.from("deposits").insert([depositPayload]);
+      // No .select()
 
-      console.log("Supabase insert response. Error:", error);
+      console.log("Supabase insert response. Error:", insertError);
 
-      if (error) {
-        console.error("Supabase insert error object:", error);
-        throw error;
+      if (insertError) {
+        console.error("Supabase insert error object:", insertError);
+        throw insertError;
       }
 
       toast({
@@ -112,55 +121,12 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
         variant: "destructive",
       });
     } finally {
-      console.log("onSubmit finally block. Setting isSubmitting to false.");
+      console.log("Credit Account onSubmit finally block. Setting isSubmitting to false.");
       setIsSubmitting(false);
     }
   };
 
-  const handleTestInsert = async () => { // Keeping this for sanity checks if needed
-    console.log("Attempting direct Supabase test insert...");
-    if (!user || !account) { // user from useAuth() might be slightly stale, but account must be present
-      console.error("Test Insert: Account prop missing");
-      alert("Test Insert: Account prop missing. Cannot perform test.");
-      return;
-    }
-    try {
-      const { data: { user: currentUserForTest }, error: userCheckError } = await supabase.auth.getUser();
-      console.log('Current user for test insert:', currentUserForTest, 'User Check Error:', userCheckError);
-
-      if (userCheckError || !currentUserForTest) {
-        alert('Cannot get current user before test insert. Aborting. Error: ' + (userCheckError?.message || 'No current user'));
-        console.error("Test Insert: Failed to get current user", userCheckError);
-        return;
-      }
-      // Optional: Compare context user with freshly fetched user if needed
-      // if (user?.id !== currentUserForTest.id) {
-      //     console.warn('User context mismatch during test insert. Context user:', user?.id, 'Fetched user:', currentUserForTest.id);
-      //     // Decide if this is critical enough to stop, or proceed with currentUserForTest.id
-      // }
-
-      const { data: testData, error: testError } = await supabase.from('deposits').insert({
-        user_id: currentUserForTest.id, // Use freshly fetched user ID
-        account_id: account.id,
-        amount: 1.00,
-        reference_number: `TESTDIRECT-${Date.now()}-${Math.random().toString(36).substring(2,9).toUpperCase()}`, // slightly more unique
-        description: "Direct Supabase Client Test from Modal",
-        currency: account.currency || 'FCFA',
-        // status will default to 'pending' as per DB schema for deposits
-      }); // .select() REMOVED
-
-      if (testError) {
-        console.error('Direct Supabase Test Insert ERROR:', testError);
-        alert('Direct Test Failed: ' + testError.message);
-      } else {
-        console.log('Direct Supabase Test Insert SUCCESS:', testData);
-        alert('Direct Test Succeeded! Check the console and database.');
-      }
-    } catch (e) {
-      console.error('Direct Supabase Test Insert CATCH:', e);
-      alert('Direct Test CATCH: ' + (e as any).message);
-    }
-  };
+  // Test insert function and button are now removed.
 
   if (!account) return null;
 
@@ -210,14 +176,11 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
             Note: This credit request will be processed by an administrator. Funds will appear in your account upon approval.
           </p>
 
-          <DialogFooter className="sm:justify-between">
-            <Button type="button" variant="destructive" onClick={handleTestInsert} className="mr-auto">Test Direct Insert</Button>
-            <div className="flex space-x-2">
-              <Button type="button" variant="outline" onClick={() => { reset(); onOpenChange(false); }}>Cancel</Button>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Submitting..." : "Submit Credit Request"}
-              </Button>
-            </div>
+          <DialogFooter> {/* Removed sm:justify-between and test button to simplify */}
+            <Button type="button" variant="outline" onClick={() => { reset(); onOpenChange(false); }}>Cancel</Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? "Submitting..." : "Submit Credit Request"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
