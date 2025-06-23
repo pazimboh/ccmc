@@ -1,7 +1,6 @@
-
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { setLocalLoginAttemptFlag } from "@/contexts/AuthContext"; // Import the new flag setter
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,85 +8,110 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext"; // We'll use parts of AuthContext for now, or adapt it
+import { User, Session } from '@supabase/supabase-js'; // Import User and Session types
+
+// Define Profile and UserRole types if not already globally available
+interface Profile {
+  id: string;
+  first_name: string;
+  last_name: string;
+  phone?: string;
+  address?: string;
+  account_type?: string;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
+interface UserRole {
+  role: 'admin' | 'customer';
+}
+
 
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(false); // This can be used for LocalStorage persistence duration
-  const [isLoading, setIsLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+  const [isLoading, setIsLoading] = useState(false); // Login.tsx's own loading state for the button
   const { toast } = useToast();
   const navigate = useNavigate();
-  const { triggerStateSyncFromLocalStorage } = useAuth();
+  const { setAuthStateDirectly } = useAuth();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLocalLoginAttemptFlag(true); // Set module-level flag
-    setIsLoading(true); // Component's own loading state
+    setIsLoading(true);
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
-      if (error) {
-        throw error;
+      if (signInError) {
+        throw signInError;
       }
 
-      if (data.user && data.session) {
+      if (authData.user && authData.session) {
         // Store user and session in LocalStorage
-        localStorage.setItem("user", JSON.stringify(data.user));
-        localStorage.setItem("session", JSON.stringify(data.session));
+        localStorage.setItem("user", JSON.stringify(authData.user));
+        localStorage.setItem("session", JSON.stringify(authData.session));
 
-        // Fetch profile and role to store in LocalStorage as well
-        // This mimics part of what AuthContext did, but now we store it for ProtectedRoute/GuestRoute
-        const userId = data.user.id;
-        const { data: profileData, error: profileError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
+        // Fetch profile and role
+        const userId = authData.user.id;
+        let userProfile: Profile | null = null;
+        let userRoleData: UserRole | null = null;
 
-        if (profileError) console.error('Error fetching profile for localStorage:', profileError.message);
-        if (profileData) localStorage.setItem('profile', JSON.stringify(profileData));
+        try {
+            const { data: fetchedProfile, error: profileError } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', userId)
+              .single();
+            if (profileError) {
+                console.error('Error fetching profile post-login:', profileError.message);
+                // Not throwing error here, proceed with null profile
+            }
+            userProfile = fetchedProfile as Profile | null;
+            if (userProfile) localStorage.setItem('profile', JSON.stringify(userProfile));
+            else localStorage.removeItem('profile');
+        } catch (e: any) {
+            console.error('Exception fetching profile for localStorage:', e.message);
+            localStorage.removeItem('profile');
+        }
 
-        const { data: roleData, error: roleError } = await supabase
-          .from('user_roles')
-          .select('role')
-          .eq('user_id', userId)
-          .single();
+        try {
+            const { data: fetchedRole, error: roleError } = await supabase
+              .from('user_roles')
+              .select('role')
+              .eq('user_id', userId)
+              .single();
+            if (roleError) {
+                console.error('Error fetching role post-login:', roleError.message);
+                // Not throwing error here, proceed with null role
+            }
+            userRoleData = fetchedRole as UserRole | null;
+            if (userRoleData) localStorage.setItem('userRole', JSON.stringify(userRoleData));
+            else localStorage.removeItem('userRole');
+        } catch (e: any) {
+            console.error('Exception fetching role for localStorage:', e.message);
+            localStorage.removeItem('userRole');
+        }
 
-        if (roleError) console.error('Error fetching role for localStorage:', roleError.message);
-        if (roleData) localStorage.setItem('userRole', JSON.stringify(roleData));
-
-        // Removed: await refreshUserData();
-        // AuthContext will rely on its onAuthStateChange or initial load from localStorage.
-        // The necessary items are already in localStorage for ProtectedRoute/GuestRoute.
-
-        // Explicitly tell AuthContext to sync its state from LocalStorage NOW.
-        triggerStateSyncFromLocalStorage();
+        // Directly update AuthContext state
+        setAuthStateDirectly({
+          user: authData.user as User, // Cast to ensure type
+          session: authData.session as Session, // Cast to ensure type
+          profile: userProfile,
+          userRole: userRoleData,
+        });
 
         toast({
           title: "Login Successful",
           description: "Welcome back!",
         });
 
-        // Navigate based on role/approval status stored in localStorage
-        // These were fetched and stored above.
-        // const storedProfile = profileData;
-        // const storedRole = roleData;
-        // It's safer to read them back from LS to ensure we use what ProtectedRoute will use,
-        // or rely on AuthContext state if it's guaranteed to be updated by triggerStateSyncFromLocalStorage.
-        // For now, let's use the fresh data from LS that was just written.
-
-        const finalProfile = JSON.parse(localStorage.getItem('profile') || 'null');
-        const finalRole = JSON.parse(localStorage.getItem('userRole') || 'null');
-
-
-        if (finalRole?.role === 'admin') {
+        // Navigate based on the fetched (and now context-set) profile and role
+        if (userRoleData?.role === 'admin') {
           navigate("/admin", { replace: true });
-        } else if (finalProfile?.status === 'approved') {
+        } else if (userProfile?.status === 'approved') {
           navigate("/dashboard", { replace: true });
         } else {
           // Pending or other statuses also go to dashboard as per requirements
@@ -95,14 +119,11 @@ const Login = () => {
         }
 
       } else {
-        // Should not happen if signInWithPassword is successful
-        toast({
-          title: "Login Failed",
-          description: "No user or session data returned.",
-          variant: "destructive",
-        });
+        // Should not happen if signInWithPassword is successful without error
+        throw new Error("Login successful but no user or session data returned.");
       }
     } catch (error: any) {
+      console.error("Login page error:", error);
       toast({
         title: "Login Failed",
         description: error.message || "An unexpected error occurred.",
@@ -110,9 +131,6 @@ const Login = () => {
       });
     } finally {
       setIsLoading(false);
-       // AuthContext will also set this to false after its sync if login was successful.
-       // Setting it here ensures it's false if login fails before AuthContext's involvement.
-       setLocalLoginAttemptFlag(false);
     }
   };
 

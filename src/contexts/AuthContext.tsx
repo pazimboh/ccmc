@@ -2,13 +2,9 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
-// Module-level flag
-let isLocalLoginAttemptInProgress = false;
-
-export const setLocalLoginAttemptFlag = (value: boolean) => {
-  // console.log(`AuthContext: Setting isLocalLoginAttemptInProgress to ${value}`);
-  isLocalLoginAttemptInProgress = value;
-};
+// No longer using module-level flag for this approach
+// let isLocalLoginAttemptInProgress = false;
+// export const setLocalLoginAttemptFlag = (value: boolean) => { ... };
 
 interface Profile {
   id: string;
@@ -24,6 +20,13 @@ interface UserRole {
   role: 'admin' | 'customer';
 }
 
+interface DirectAuthState {
+  user: User | null;
+  session: Session | null;
+  profile: Profile | null;
+  userRole: UserRole | null;
+}
+
 interface AuthContextType {
   user: User | null;
   session: Session | null;
@@ -35,7 +38,8 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   refreshUserData: () => Promise<void>;
   localAuthLoaded: boolean;
-  triggerStateSyncFromLocalStorage: () => boolean;
+  // triggerStateSyncFromLocalStorage: () => boolean; // Removing this in favor of direct set
+  setAuthState напрямую: (data: DirectAuthState) => void; // New direct setter
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -59,8 +63,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isApproved = profile?.status === 'approved';
   const isAdmin = userRole?.role === 'admin';
 
-  const triggerStateSyncFromLocalStorage = () => {
-    // console.log("AuthContext: triggerStateSyncFromLocalStorage called.");
+  // New function for Login.tsx to call
+  const setAuthStateDirectly = (data: DirectAuthState) => {
+    console.log("AuthContext: setAuthStateDirectly called by Login.tsx", data);
+    setUser(data.user);
+    setSession(data.session);
+    setProfile(data.profile);
+    setUserRole(data.userRole);
+    // LocalStorage should have already been set by Login.tsx
+    // Ensure Supabase client has the session if provided
+    if (data.session) {
+        supabase.auth.setSession(data.session);
+    }
+    setIsLoading(false);
+  };
+
+  // Reads from LS and updates state. Used on initial load.
+  const syncStateFromLocalStorage = (): boolean => {
+    // console.log("AuthContext: syncStateFromLocalStorage called.");
     const lsUser = localStorage.getItem("user");
     const lsSession = localStorage.getItem("session");
     const lsProfile = localStorage.getItem("profile");
@@ -74,14 +94,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (lsUserRole) setUserRole(JSON.parse(lsUserRole)); else setUserRole(null);
       userActuallyFoundAndSet = true;
     } else {
-      setUser(null);
-      setSession(null);
-      setProfile(null);
-      setUserRole(null);
+      setUser(null); setSession(null); setProfile(null); setUserRole(null);
     }
     setIsLoading(false);
     return userActuallyFoundAndSet;
   };
+
 
   const refreshUserData = async () => {
     console.log("AuthContext: Refreshing user data from Supabase.");
@@ -91,7 +109,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (userError || sessionError) {
         console.error("AuthContext: Error getting user/session from Supabase", userError || sessionError);
-        await signOutInternalLogic(false); // Avoid calling supabase.auth.signOut again if it failed
+        await internalSignOut(false);
         return;
     }
 
@@ -102,7 +120,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(currentSession);
 
       const userId = currentSupabaseUser.id;
-      // Profile and Role fetching logic remains the same
       const { data: profileData, error: profileError } = await supabase.from('profiles').select('*').eq('id', userId).single();
       if (profileError) { localStorage.removeItem('profile'); setProfile(null); }
       else if (profileData) { localStorage.setItem('profile', JSON.stringify(profileData)); setProfile(profileData as Profile); }
@@ -113,112 +130,100 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       else if (roleData) { localStorage.setItem('userRole', JSON.stringify(roleData)); setUserRole(roleData as UserRole); }
       else { localStorage.removeItem('userRole'); setUserRole(null); }
     } else {
-      // No active Supabase session
       localStorage.removeItem("user"); localStorage.removeItem("session"); localStorage.removeItem("profile"); localStorage.removeItem("userRole");
       setUser(null); setSession(null); setProfile(null); setUserRole(null);
     }
     setIsLoading(false);
   };
 
-  // Separated internal logic for signOut to avoid recursive calls via onAuthStateChange
-  const signOutInternalLogic = (callSupabaseSignOut: boolean = true) => {
-    console.log("AuthContext: signOutInternalLogic called.");
-    if (callSupabaseSignOut) {
-        supabase.auth.signOut().catch(err => console.error("AuthContext: Supabase signOut error", err));
+  const internalSignOut = async (callSupabase: boolean = true) => {
+    console.log("AuthContext: internalSignOut called.");
+    if (callSupabase) {
+        try { await supabase.auth.signOut(); }
+        catch (err) { console.error("AuthContext: Supabase signOut error", err); }
     }
     localStorage.removeItem("user"); localStorage.removeItem("session"); localStorage.removeItem("profile"); localStorage.removeItem("userRole");
     localStorage.removeItem("dashboardAccounts"); localStorage.removeItem("dashboardTransactions");
-    setLocalLoginAttemptFlag(false); // Clear flag on sign out
     setUser(null); setSession(null); setProfile(null); setUserRole(null);
     setIsLoading(false);
-  }
+  };
 
   const signOut = async () => {
-    await signOutInternalLogic(true);
+    await internalSignOut(true);
   };
 
 
   useEffect(() => {
-    console.log("AuthContext: Initializing...");
-    const userFoundInLs = triggerStateSyncFromLocalStorage();
+    console.log("AuthContext: Initializing (useEffect)...");
+    const userFoundInLs = syncStateFromLocalStorage(); // Try to load from LS, sets isLoading=false
     setLocalAuthLoaded(true);
 
     if (!userFoundInLs) {
         console.log("AuthContext: No user from LS on initial load. Checking Supabase session.");
-        supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
-            if (currentSession?.user) {
+        supabase.auth.getSession().then(({ data: { session: supabaseSession } }) => {
+            if (supabaseSession?.user) {
                 console.log("AuthContext: Active Supabase session found. Refreshing data.");
+                // If a Supabase session exists, it's the source of truth.
+                // refreshUserData will fetch, update LS, and update context state.
                 refreshUserData();
             } else {
-                console.log("AuthContext: No active Supabase session found.");
+                console.log("AuthContext: No active Supabase session found. User remains logged out.");
+                // syncStateFromLocalStorage already set user to null and isLoading to false.
             }
         });
     } else {
-        console.log("AuthContext: User loaded from LS on initial load.");
+        console.log("AuthContext: User successfully loaded from LS on initial load.");
+         // If user loaded from LS, ensure Supabase client knows about the session
+        const lsSession = localStorage.getItem("session");
+        if (lsSession) {
+            supabase.auth.setSession(JSON.parse(lsSession));
+        }
     }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, newSession) => {
-        console.log(`AuthContext: onAuthStateChange event: ${event}`, newSession?.user?.email || '');
+      async (event, sessionFromEvent) => {
+        console.log(`AuthContext: onAuthStateChange event: ${event}`, sessionFromEvent?.user?.email || '');
         
-        if (event === "INITIAL_SESSION") {
-            // This event might be redundant if getSession() is already called.
-            // However, if it fires and we have a session, ensure data is fresh.
-            if (newSession?.user) {
-                if(isLocalLoginAttemptInProgress){
-                    console.log("AuthContext: INITIAL_SESSION during local login. Deferring to Login.tsx sync.");
-                    triggerStateSyncFromLocalStorage(); // Ensure state is from LS
-                    setLocalLoginAttemptFlag(false); // Reset flag as login process should take over or complete
-                } else {
-                    console.log("AuthContext: INITIAL_SESSION with user. Refreshing data.");
-                    await refreshUserData();
-                }
-            } else {
-                 console.log("AuthContext: INITIAL_SESSION no user. Ensuring logged out state.");
-                 signOutInternalLogic(false); // Ensure local state is cleared
-            }
-            return; // Typically don't need to handle other events if INITIAL_SESSION is comprehensive
-        }
-
+        // The setAuthStateDirectly from Login.tsx should be the primary way a local login updates context.
+        // This listener now primarily handles external changes (other tabs, magic links, session expiry).
 
         if (event === "SIGNED_IN") {
-          if (isLocalLoginAttemptInProgress) {
-            console.log("AuthContext: SIGNED_IN event during local login. Login.tsx will call triggerStateSyncFromLocalStorage.");
-            // Login.tsx is responsible for populating LS and calling triggerStateSyncFromLocalStorage().
-            // That call will set isLoading to false and update context state.
-            // Reset the flag here as the login attempt (from AuthContext's perspective) is now confirmed.
-            triggerStateSyncFromLocalStorage(); // Sync from LS one more time for safety
-            setLocalLoginAttemptFlag(false);
-          } else {
-            console.log("AuthContext: SIGNED_IN event (external). Refreshing user data.");
-            await refreshUserData();
-          }
-        } else if (event === "SIGNED_OUT") {
-          console.log("AuthContext: SIGNED_OUT event. Clearing all auth data.");
-          signOutInternalLogic(false); // Call internal to avoid loop if signOut itself triggered this
-        } else if (event === "TOKEN_REFRESHED" && newSession) {
-            console.log('AuthContext: TOKEN_REFRESHED event.');
-            if (newSession) {
-                localStorage.setItem("session", JSON.stringify(newSession));
-                setSession(newSession);
-                const userFromSession = newSession.user;
-                if (user && userFromSession.id === user.id) {
-                    localStorage.setItem("user", JSON.stringify(userFromSession));
-                    setUser(userFromSession);
-                } else {
-                    await refreshUserData();
-                }
+            // If Login.tsx called setAuthStateDirectly, context is already up-to-date.
+            // This event might be for an external sign-in.
+            // To be safe, refresh unless the current user in context matches the event's user.
+            // This avoids a refresh if setAuthStateDirectly just ran.
+            if (user?.id !== sessionFromEvent?.user?.id) {
+                console.log("AuthContext: SIGNED_IN event (likely external or context out of sync). Refreshing user data.");
+                await refreshUserData();
             } else {
-                await signOutInternalLogic(false);
+                console.log("AuthContext: SIGNED_IN event, but user in context matches. Assuming Login.tsx handled it.");
+                // Ensure isLoading is false, as Login.tsx might not have set it if this event is very fast.
+                if (isLoading) setIsLoading(false);
+            }
+        } else if (event === "SIGNED_OUT") {
+          console.log("AuthContext: SIGNED_OUT event. Clearing all auth data locally.");
+          await internalSignOut(false); // Don't call Supabase signOut, just clear local state
+        } else if (event === "TOKEN_REFRESHED") {
+            console.log('AuthContext: TOKEN_REFRESHED event.');
+            if (sessionFromEvent) {
+                localStorage.setItem("session", JSON.stringify(sessionFromEvent));
+                setSession(sessionFromEvent);
+                if (sessionFromEvent.user) { // If user object also changed (e.g. metadata)
+                    localStorage.setItem("user", JSON.stringify(sessionFromEvent.user));
+                    setUser(sessionFromEvent.user);
+                }
+            } else { // No session after refresh? Treat as sign out.
+                await internalSignOut(false);
             }
             setIsLoading(false);
         } else if (event === "USER_UPDATED") {
             console.log('AuthContext: USER_UPDATED event.');
-            await refreshUserData();
+            await refreshUserData(); // User's own data (e.g. email) changed.
         } else if (event === "PASSWORD_RECOVERY") {
             console.log('AuthContext: PASSWORD_RECOVERY event.');
             setIsLoading(false);
         }
+        // INITIAL_SESSION is often handled by getSession on load.
       }
     );
 
@@ -226,7 +231,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.log("AuthContext: Unsubscribing from onAuthStateChange.");
       subscription.unsubscribe();
     };
-  }, []);
+  }, []); // Run once on mount
 
   return (
     <AuthContext.Provider
@@ -240,7 +245,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAdmin,
         signOut,
         refreshUserData,
-        triggerStateSyncFromLocalStorage,
+        setAuthStateDirectly, // Expose the new function
         localAuthLoaded,
       }}
     >
