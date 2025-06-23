@@ -9,11 +9,13 @@ import DashboardNav from "@/components/dashboard/DashboardNav";
 import RecentTransactions from "@/components/dashboard/RecentTransactions";
 import AccountSummary from "@/components/dashboard/AccountSummary";
 import { ArrowUpRight, CreditCard, /*DollarSign,*/ PiggyBank, Plus, AlertCircle } from "lucide-react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams, useNavigate } from "react-router-dom"; // Import useNavigate
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Tables } from "@/integrations/supabase/types";
-import { getItemWithExpiry, setItemWithExpiry } from "@/lib/localStorageWithExpiry"; // Import new utility
+import { getItemWithExpiry, setItemWithExpiry } from "@/lib/localStorageWithExpiry";
+import { AddAccountModal } from "@/components/dashboard/AddAccountModal";
+import { CreditAccountModal } from "@/components/dashboard/CreditAccountModal"; // Import the new modal
 
 // Define a type for Account, matching AccountSummaryProps and Supabase accounts table
 // interface Account extends Tables<"accounts"> { // Inherit from Supabase type
@@ -33,8 +35,12 @@ const DASHBOARD_ACCOUNTS_KEY = "dashboardAccounts";
 const DASHBOARD_TRANSACTIONS_KEY = "dashboardTransactions";
 
 const Dashboard = () => {
+  const navigate = useNavigate(); // Initialize useNavigate
   const [activeTab, setActiveTab] = useState("overview");
   const { profile, user } = useAuth();
+  const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
+  const [isCreditAccountModalOpen, setIsCreditAccountModalOpen] = useState(false);
+  const [selectedAccountForCredit, setSelectedAccountForCredit] = useState<Tables<'accounts'> | null>(null);
 
   // State for data
   const [accountsData, setAccountsData] = useState<Tables<"accounts">[]>([]);
@@ -69,77 +75,85 @@ const Dashboard = () => {
   };
 
 
-  useEffect(() => {
-    const loadData = async () => {
-      setIsLoading(true);
-      setError(null);
+  // Wrap loadData in useCallback to keep its reference stable unless profile.id changes
+  // And make it callable for refreshing data after adding an account.
+  const loadData = useCallback(async (forceRefresh = false) => {
+    setIsLoading(true);
+    setError(null);
 
-      // Use profile from useAuth()
-      if (!profile?.id) {
-        setError("User profile not found. Cannot fetch data.");
-        setIsLoading(false);
-        return;
-      }
+    if (!profile?.id) {
+      setError("User profile not found. Cannot fetch data.");
+      setIsLoading(false);
+      return;
+    }
 
-      // Try to load from LocalStorage first using the new utility
+    if (!forceRefresh) {
       const cachedAccounts = getItemWithExpiry<Tables<"accounts">[]>(DASHBOARD_ACCOUNTS_KEY);
       const cachedTransactions = getItemWithExpiry<Tables<"transactions">[]>(DASHBOARD_TRANSACTIONS_KEY);
 
       if (cachedAccounts && cachedTransactions) {
-        // Data found in localStorage and not expired
         setAccountsData(cachedAccounts);
         setTransactionsData(cachedTransactions);
         calculateKPIs(cachedAccounts, cachedTransactions);
         setIsLoading(false);
-        // console.log("Dashboard data loaded from localStorage (with expiry)");
         return;
       }
+    }
 
-      // If not in LocalStorage, expired, or parsing failed, fetch from Supabase
-      // console.log("Fetching dashboard data from Supabase (cache miss or expired)...");
-      try {
-        // Fetch accounts
-        const { data: fetchedAccounts, error: accountsError } = await supabase
-          .from("accounts")
-          .select("*")
-          .eq("user_id", profile.id);
+    // console.log("Fetching dashboard data from Supabase (cache miss, expired, or forced refresh)...");
+    try {
+      const { data: fetchedAccounts, error: accountsError } = await supabase
+        .from("accounts")
+        .select("*")
+        .eq("user_id", profile.id);
 
-        if (accountsError) throw accountsError;
-        setAccountsData(fetchedAccounts || []);
-        setItemWithExpiry(DASHBOARD_ACCOUNTS_KEY, fetchedAccounts || [], TWENTY_FOUR_HOURS_IN_MS);
+      if (accountsError) throw accountsError;
+      setAccountsData(fetchedAccounts || []);
+      setItemWithExpiry(DASHBOARD_ACCOUNTS_KEY, fetchedAccounts || [], TWENTY_FOUR_HOURS_IN_MS);
 
-        // Fetch transactions
-        const { data: fetchedTransactions, error: transactionsError } = await supabase
-          .from("transactions")
-          .select("*")
-          // .eq("customer_id", localProfile.id) // Assuming customer_id in transactions is user_id from profiles
-          // Check if transactions table uses user_id or customer_id that maps to profiles.id
-          // For consistency with accounts, let's assume it's user_id or there's a direct link.
-          // If transactions are linked via account_id, then we'd need to fetch accounts first, then their transactions.
-          // The previous code used customer_id. Let's assume profile.id IS the customer_id for transactions.
-          .eq("customer_id", profile.id)  // Use profile.id from context
-          .order("created_at", { ascending: false })
-          .limit(10); // Consider if more transactions are needed for accurate monthly spending
+      const { data: fetchedTransactions, error: transactionsError } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("customer_id", profile.id)
+        .order("created_at", { ascending: false })
+        .limit(10);
 
-        if (transactionsError) throw transactionsError;
-        setTransactionsData(fetchedTransactions || []);
-        setItemWithExpiry(DASHBOARD_TRANSACTIONS_KEY, fetchedTransactions || [], TWENTY_FOUR_HOURS_IN_MS);
+      if (transactionsError) throw transactionsError;
+      setTransactionsData(fetchedTransactions || []);
+      setItemWithExpiry(DASHBOARD_TRANSACTIONS_KEY, fetchedTransactions || [], TWENTY_FOUR_HOURS_IN_MS);
 
-        calculateKPIs(fetchedAccounts || [], fetchedTransactions || []);
+      calculateKPIs(fetchedAccounts || [], fetchedTransactions || []);
+    } catch (err) {
+      console.error("Error fetching dashboard data:", err);
+      setError(err instanceof Error ? err.message : "An unknown error occurred.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [profile?.id]); // Dependency: profile.id
 
-      } catch (err) {
-        console.error("Error fetching dashboard data:", err);
-        setError(err instanceof Error ? err.message : "An unknown error occurred.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadData();
-  }, [profile?.id]); // Rerun if profile.id from context changes
+  useEffect(() => {
+    loadData(); // Initial load
+  }, [loadData]); // useEffect depends on loadData
 
 
-  if (isLoading) {
+  const handleAccountAdded = () => {
+    loadData(true); // Force refresh data from Supabase after adding an account
+  };
+
+  const handleOpenCreditAccountModal = (account: Tables<'accounts'>) => {
+    setSelectedAccountForCredit(account);
+    setIsCreditAccountModalOpen(true);
+  };
+
+  const handleCreditRequestSubmitted = () => {
+    // Optionally, refresh transactions or show a specific global notification
+    // For now, the modal handles its own success toast.
+    // We might want to refresh all dashboard data if pending deposits affect summaries.
+    loadData(true); // Refresh all dashboard data for simplicity
+    console.log("Credit request submitted, dashboard data refreshed.");
+  };
+
+  if (isLoading && accountsData.length === 0) { // Show loader if loading and no data yet
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="flex flex-col items-center">
@@ -243,7 +257,7 @@ const Dashboard = () => {
                       <CardTitle className="text-sm font-medium">Quick Actions</CardTitle>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-2">
-                      <Button variant="outline" size="sm" className="justify-start" disabled title="Feature coming soon">
+                      <Button variant="outline" size="sm" className="justify-start" onClick={() => setIsAddAccountModalOpen(true)}>
                         <Plus className="mr-2 h-4 w-4" /> Add Account
                       </Button>
                       <Link to="/transfer">
@@ -318,7 +332,13 @@ const Dashboard = () => {
                         <CardHeader>
                           <div className="flex items-center justify-between">
                             <CardTitle>{account.name}</CardTitle>
-                            <Button variant="outline" size="sm">Manage</Button>
+                             <Button
+                               variant="outline"
+                               size="sm"
+                               onClick={() => navigate('/transfer', { state: { fromAccount: account } })}
+                             >
+                               Manage
+                             </Button>
                           </div>
                           <CardDescription>Account Number: {account.account_number}</CardDescription>
                         </CardHeader>
@@ -329,8 +349,20 @@ const Dashboard = () => {
                               <p className="text-3xl font-bold">{Number(account.balance).toLocaleString()} FCFA</p>
                             </div>
                             <div className="space-x-2">
-                              <Button size="sm">Transfer</Button>
-                              <Button size="sm" variant="outline">Statements</Button>
+                              {/* TODO: The "Transfer" button here could also use navigate('/transfer', { state: { fromAccount: account } }) */}
+                              <Button
+                                size="sm"
+                                onClick={() => navigate('/transfer', { state: { fromAccount: account } })}
+                              >
+                                Transfer
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleOpenCreditAccountModal(account)}
+                              >
+                                Credit Account
+                              </Button>
                             </div>
                           </div>
                           <Separator className="my-4" />
@@ -348,7 +380,7 @@ const Dashboard = () => {
                   
                   <Card className="border-dashed border-2">
                     <CardContent className="flex items-center justify-center p-6">
-                      <Button>
+                      <Button onClick={() => setIsAddAccountModalOpen(true)}>
                         <Plus className="mr-2 h-4 w-4" /> Open New Account
                       </Button>
                     </CardContent>
@@ -361,6 +393,17 @@ const Dashboard = () => {
           </div>
         </main>
       </div>
+      <AddAccountModal
+        open={isAddAccountModalOpen}
+        onOpenChange={setIsAddAccountModalOpen}
+        onAccountAdded={handleAccountAdded}
+      />
+      <CreditAccountModal
+        open={isCreditAccountModalOpen}
+        onOpenChange={setIsCreditAccountModalOpen}
+        account={selectedAccountForCredit}
+        onCreditRequestSubmitted={handleCreditRequestSubmitted}
+      />
     </div>
   );
 };
