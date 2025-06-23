@@ -22,6 +22,7 @@ const Login = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    localStorage.setItem('isLoggingIn', 'true'); // Set flag before sign-in attempt
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -108,6 +109,7 @@ const Login = () => {
       });
     } finally {
       setIsLoading(false);
+       localStorage.removeItem('isLoggingIn'); // Clear flag after all operations
     }
   };
 

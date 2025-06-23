@@ -27,7 +27,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   refreshUserData: () => Promise<void>;
   localAuthLoaded: boolean;
-  triggerStateSyncFromLocalStorage: () => void;
+  triggerStateSyncFromLocalStorage: () => boolean; // Returns true if user was found in LS
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -52,41 +52,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isAdmin = userRole?.role === 'admin';
 
   const triggerStateSyncFromLocalStorage = () => {
-    console.log("AuthContext: Manually triggered state sync from LocalStorage.");
+    // console.log("AuthContext: Manually triggered state sync from LocalStorage.");
     const lsUser = localStorage.getItem("user");
     const lsSession = localStorage.getItem("session");
     const lsProfile = localStorage.getItem("profile");
     const lsUserRole = localStorage.getItem("userRole");
 
-    let userChanged = false;
+    let userActuallyFoundAndSet = false;
     if (lsUser && lsSession) {
-      const parsedUser = JSON.parse(lsUser);
-      const parsedSession = JSON.parse(lsSession);
-      if (JSON.stringify(user) !== JSON.stringify(parsedUser)) setUser(parsedUser);
-      if (JSON.stringify(session) !== JSON.stringify(parsedSession)) setSession(parsedSession);
-
-      if (lsProfile) {
-        const parsedProfile = JSON.parse(lsProfile);
-        if (JSON.stringify(profile) !== JSON.stringify(parsedProfile)) setProfile(parsedProfile);
-      } else {
-        if (profile !== null) setProfile(null);
-      }
-      if (lsUserRole) {
-        const parsedUserRole = JSON.parse(lsUserRole);
-        if (JSON.stringify(userRole) !== JSON.stringify(parsedUserRole)) setUserRole(parsedUserRole);
-      } else {
-        if (userRole !== null) setUserRole(null);
-      }
-      userChanged = true;
+      setUser(JSON.parse(lsUser));
+      setSession(JSON.parse(lsSession));
+      if (lsProfile) setProfile(JSON.parse(lsProfile)); else setProfile(null);
+      if (lsUserRole) setUserRole(JSON.parse(lsUserRole)); else setUserRole(null);
+      userActuallyFoundAndSet = true;
     } else {
-      if (user !== null) setUser(null);
-      if (session !== null) setSession(null);
-      if (profile !== null) setProfile(null);
-      if (userRole !== null) setUserRole(null);
+      setUser(null);
+      setSession(null);
+      setProfile(null);
+      setUserRole(null);
     }
     setIsLoading(false);
-    // console.log("AuthContext: Sync complete. User from LS:", lsUser ? JSON.parse(lsUser) : null);
-    return userChanged; // Indicate if user state was established from LS
+    return userActuallyFoundAndSet;
   };
 
   const refreshUserData = async () => {
@@ -97,8 +83,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (userError || sessionError) {
         console.error("AuthContext: Error getting user/session from Supabase", userError || sessionError);
-        // Potentially clear local state if Supabase session is invalid
-        signOut(); // This will clear local storage and set loading to false
+        signOut();
         return;
     }
 
@@ -165,13 +150,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       console.error('AuthContext: Error during Supabase signOut:', error);
     } finally {
-      // Clear all auth-related local storage and context state
       localStorage.removeItem("user");
       localStorage.removeItem("session");
       localStorage.removeItem("profile");
       localStorage.removeItem("userRole");
       localStorage.removeItem("dashboardAccounts");
       localStorage.removeItem("dashboardTransactions");
+      localStorage.removeItem("isLoggingIn"); // Ensure flag is cleared on sign out
       setUser(null);
       setSession(null);
       setProfile(null);
@@ -182,7 +167,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     console.log("AuthContext: Initializing...");
-    // Attempt to load from LS. This also sets isLoading to false.
     const userFoundInLs = triggerStateSyncFromLocalStorage();
     setLocalAuthLoaded(true);
 
@@ -191,10 +175,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
             if (currentSession?.user) {
                 console.log("AuthContext: Active Supabase session found. Refreshing data.");
-                refreshUserData(); // Fetches from Supabase, updates LS, updates context, sets isLoading.
+                refreshUserData();
             } else {
                 console.log("AuthContext: No active Supabase session found.");
-                // triggerStateSyncFromLocalStorage already set user to null and isLoading to false.
             }
         });
     } else {
@@ -206,35 +189,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.log(`AuthContext: onAuthStateChange event: ${event}`, newSession?.user?.email || '');
         
         if (event === "SIGNED_IN") {
-          // This event can be triggered by Login.tsx OR by external means (magic link, other tab).
-          // Login.tsx will call triggerStateSyncFromLocalStorage() itself after populating LS.
-          // For external sign-ins, refreshUserData() is more appropriate.
-          // The challenge is distinguishing. A simple check: if context's user is already set
-          // to newSession's user, maybe Login.tsx handled it.
-          // This logic can be tricky. Let's assume refreshUserData is safer for generic SIGNED_IN events.
-          // Login.tsx's explicit sync call should ideally complete before this does much if it's a local login.
-          console.log("AuthContext: SIGNED_IN event. Refreshing user data to ensure consistency.");
-          await refreshUserData();
+          const isLocalLoginInProgress = localStorage.getItem('isLoggingIn') === 'true';
+          if (isLocalLoginInProgress) {
+            console.log("AuthContext: SIGNED_IN event detected during local login. Deferring to Login.tsx's explicit sync.");
+            // Login.tsx is responsible for populating LS and calling triggerStateSyncFromLocalStorage().
+            // That call will set isLoading to false and update context state.
+            // It's important that this block doesn't prematurely set isLoading(true) via refreshUserData.
+            // For safety, ensure current context reflects LS if it changed.
+            triggerStateSyncFromLocalStorage();
+          } else {
+            console.log("AuthContext: SIGNED_IN event (external). Refreshing user data.");
+            await refreshUserData();
+          }
         } else if (event === "SIGNED_OUT") {
-          // Handles external sign-outs. signOut() function handles local ones.
           console.log("AuthContext: SIGNED_OUT event. Clearing all auth data.");
-          signOut(); // Use the internal signOut to clear everything consistently.
+          signOut();
         } else if (event === "TOKEN_REFRESHED" && newSession) {
             console.log('AuthContext: TOKEN_REFRESHED event.');
             if (newSession) {
                 localStorage.setItem("session", JSON.stringify(newSession));
-                setSession(newSession); // Update session in context
-                // Verify user from new session
+                setSession(newSession);
                 const userFromSession = newSession.user;
-                if (user && userFromSession.id === user.id) {
+                if (user && userFromSession.id === user.id) { // Check if user object itself needs update
                     localStorage.setItem("user", JSON.stringify(userFromSession));
-                    setUser(userFromSession); // Update user in context if it changed
-                } else {
-                    // User mismatch or no user, better to refresh all data
+                    setUser(userFromSession);
+                } else if (!user && userFromSession) { // User was null but session now has one
+                     await refreshUserData(); // Get full profile etc.
+                } else if (user && userFromSession.id !== user.id) { // Different user ID? Should be rare.
                     await refreshUserData();
                 }
             } else {
-                // No session after refresh? Treat as sign out.
                 await signOut();
             }
             setIsLoading(false);
@@ -242,8 +226,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.log('AuthContext: USER_UPDATED event.');
             await refreshUserData();
         } else if (event === "PASSWORD_RECOVERY") {
-            console.log('AuthContext: PASSWORD_RECOVERY event. Usually means user is sent a recovery link.');
-            // No specific state change here, user needs to act on the email.
+            console.log('AuthContext: PASSWORD_RECOVERY event.');
             setIsLoading(false);
         }
       }
@@ -253,7 +236,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.log("AuthContext: Unsubscribing from onAuthStateChange.");
       subscription.unsubscribe();
     };
-  }, []); // Run once on mount
+  }, []);
 
   return (
     <AuthContext.Provider
