@@ -103,12 +103,7 @@ const Login = () => {
           userRole: userRoleData,
         });
 
-        toast({
-          title: "Login Successful",
-          description: "Welcome back!",
-        });
-
-        // Navigate based on the fetched (and now context-set) profile and role
+        // Attempt navigation immediately
         if (userRoleData?.role === 'admin') {
           navigate("/admin", { replace: true });
         } else if (userProfile?.status === 'approved') {
@@ -117,6 +112,11 @@ const Login = () => {
           // Pending or other statuses also go to dashboard as per requirements
           navigate("/dashboard", { replace: true });
         }
+
+        toast({
+          title: "Login Successful",
+          description: "Welcome back!",
+        });
 
       } else {
         // Should not happen if signInWithPassword is successful without error
