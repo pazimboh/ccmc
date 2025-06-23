@@ -10,9 +10,10 @@ import RecentTransactions from "@/components/dashboard/RecentTransactions";
 import AccountSummary from "@/components/dashboard/AccountSummary";
 import { ArrowUpRight, CreditCard, /*DollarSign,*/ PiggyBank, Plus, AlertCircle } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext"; // To get user profile for fetching if needed
+import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Tables } from "@/integrations/supabase/types";
+import { getItemWithExpiry, setItemWithExpiry } from "@/lib/localStorageWithExpiry"; // Import new utility
 
 // Define a type for Account, matching AccountSummaryProps and Supabase accounts table
 // interface Account extends Tables<"accounts"> { // Inherit from Supabase type
@@ -27,13 +28,13 @@ interface DashboardKPIs {
   savingsCurrentAmount?: number;
 }
 
+const TWENTY_FOUR_HOURS_IN_MS = 24 * 60 * 60 * 1000;
+const DASHBOARD_ACCOUNTS_KEY = "dashboardAccounts";
+const DASHBOARD_TRANSACTIONS_KEY = "dashboardTransactions";
+
 const Dashboard = () => {
   const [activeTab, setActiveTab] = useState("overview");
-  // const { profile, user } = useAuth(); // user from useAuth might be from its own state or localStorage via context
-  // For direct localStorage access for profile id:
-  const storedProfileString = localStorage.getItem('profile');
-  const localProfile = storedProfileString ? JSON.parse(storedProfileString) as Tables<'profiles'> : null;
-
+  const { profile, user } = useAuth();
 
   // State for data
   const [accountsData, setAccountsData] = useState<Tables<"accounts">[]>([]);
@@ -73,48 +74,39 @@ const Dashboard = () => {
       setIsLoading(true);
       setError(null);
 
-      if (!localProfile?.id) {
+      // Use profile from useAuth()
+      if (!profile?.id) {
         setError("User profile not found. Cannot fetch data.");
         setIsLoading(false);
         return;
       }
 
-      // Try to load from LocalStorage first
-      const cachedAccounts = localStorage.getItem("dashboardAccounts");
-      const cachedTransactions = localStorage.getItem("dashboardTransactions");
+      // Try to load from LocalStorage first using the new utility
+      const cachedAccounts = getItemWithExpiry<Tables<"accounts">[]>(DASHBOARD_ACCOUNTS_KEY);
+      const cachedTransactions = getItemWithExpiry<Tables<"transactions">[]>(DASHBOARD_TRANSACTIONS_KEY);
 
       if (cachedAccounts && cachedTransactions) {
-        try {
-          const parsedAccounts = JSON.parse(cachedAccounts) as Tables<"accounts">[];
-          const parsedTransactions = JSON.parse(cachedTransactions) as Tables<"transactions">[];
-          setAccountsData(parsedAccounts);
-          setTransactionsData(parsedTransactions);
-          calculateKPIs(parsedAccounts, parsedTransactions);
-          setIsLoading(false);
-          // console.log("Dashboard data loaded from localStorage");
-          // Optionally, you could still trigger a background refresh here
-          // For now, we'll just use cached data if available.
-          return;
-        } catch (e) {
-          console.error("Failed to parse cached dashboard data:", e);
-          // Clear corrupted cache
-          localStorage.removeItem("dashboardAccounts");
-          localStorage.removeItem("dashboardTransactions");
-        }
+        // Data found in localStorage and not expired
+        setAccountsData(cachedAccounts);
+        setTransactionsData(cachedTransactions);
+        calculateKPIs(cachedAccounts, cachedTransactions);
+        setIsLoading(false);
+        // console.log("Dashboard data loaded from localStorage (with expiry)");
+        return;
       }
 
-      // If not in LocalStorage or parsing failed, fetch from Supabase
-      // console.log("Fetching dashboard data from Supabase...");
+      // If not in LocalStorage, expired, or parsing failed, fetch from Supabase
+      // console.log("Fetching dashboard data from Supabase (cache miss or expired)...");
       try {
         // Fetch accounts
         const { data: fetchedAccounts, error: accountsError } = await supabase
           .from("accounts")
           .select("*")
-          .eq("user_id", localProfile.id);
+          .eq("user_id", profile.id);
 
         if (accountsError) throw accountsError;
         setAccountsData(fetchedAccounts || []);
-        localStorage.setItem("dashboardAccounts", JSON.stringify(fetchedAccounts || []));
+        setItemWithExpiry(DASHBOARD_ACCOUNTS_KEY, fetchedAccounts || [], TWENTY_FOUR_HOURS_IN_MS);
 
         // Fetch transactions
         const { data: fetchedTransactions, error: transactionsError } = await supabase
@@ -125,13 +117,13 @@ const Dashboard = () => {
           // For consistency with accounts, let's assume it's user_id or there's a direct link.
           // If transactions are linked via account_id, then we'd need to fetch accounts first, then their transactions.
           // The previous code used customer_id. Let's assume profile.id IS the customer_id for transactions.
-          .eq("customer_id", localProfile.id)
+          .eq("customer_id", profile.id)  // Use profile.id from context
           .order("created_at", { ascending: false })
           .limit(10); // Consider if more transactions are needed for accurate monthly spending
 
         if (transactionsError) throw transactionsError;
         setTransactionsData(fetchedTransactions || []);
-        localStorage.setItem("dashboardTransactions", JSON.stringify(fetchedTransactions || []));
+        setItemWithExpiry(DASHBOARD_TRANSACTIONS_KEY, fetchedTransactions || [], TWENTY_FOUR_HOURS_IN_MS);
 
         calculateKPIs(fetchedAccounts || [], fetchedTransactions || []);
 
@@ -144,7 +136,7 @@ const Dashboard = () => {
     };
 
     loadData();
-  }, [localProfile?.id]); // Rerun if profile.id changes (e.g. user logs out and in)
+  }, [profile?.id]); // Rerun if profile.id from context changes
 
 
   if (isLoading) {
