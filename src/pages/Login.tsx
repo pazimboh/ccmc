@@ -17,7 +17,7 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
-  // const { refreshUserData } = useAuth(); // No longer calling refreshUserData directly from here
+  const { triggerStateSyncFromLocalStorage } = useAuth();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,25 +63,32 @@ const Login = () => {
         // AuthContext will rely on its onAuthStateChange or initial load from localStorage.
         // The necessary items are already in localStorage for ProtectedRoute/GuestRoute.
 
+        // Explicitly tell AuthContext to sync its state from LocalStorage NOW.
+        triggerStateSyncFromLocalStorage();
+
         toast({
           title: "Login Successful",
           description: "Welcome back!",
         });
 
         // Navigate based on role/approval status stored in localStorage
-        const storedProfile = profileData; // Use fetched data directly
-        const storedRole = roleData;
+        // These were fetched and stored above.
+        // const storedProfile = profileData;
+        // const storedRole = roleData;
+        // It's safer to read them back from LS to ensure we use what ProtectedRoute will use,
+        // or rely on AuthContext state if it's guaranteed to be updated by triggerStateSyncFromLocalStorage.
+        // For now, let's use the fresh data from LS that was just written.
 
-        if (storedRole?.role === 'admin') {
+        const finalProfile = JSON.parse(localStorage.getItem('profile') || 'null');
+        const finalRole = JSON.parse(localStorage.getItem('userRole') || 'null');
+
+
+        if (finalRole?.role === 'admin') {
           navigate("/admin", { replace: true });
-        } else if (storedProfile?.status === 'approved') {
+        } else if (finalProfile?.status === 'approved') {
           navigate("/dashboard", { replace: true });
         } else {
-          // This case is for 'pending' or 'rejected' users.
-          // As per new requirement, 'pending' users should go to dashboard.
-          // 'rejected' users ideally shouldn't be able to log in, or be redirected to a specific page.
-          // For now, if not admin and not explicitly approved, they go to dashboard.
-          // The old logic sent them to /pending-approval
+          // Pending or other statuses also go to dashboard as per requirements
           navigate("/dashboard", { replace: true });
         }
 
