@@ -136,7 +136,15 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
             <Controller
               name="amount"
               control={control}
-              render={({ field }) => <Input id="amount" type="number" placeholder="e.g., 50000" {...field} />}
+              render={({ field }) => (
+                <Input
+                  id="amount"
+                  type="number"
+                  placeholder="e.g., 50000"
+                  {...field}
+                  value={field.value === undefined || field.value === null ? '' : String(field.value)} // Ensure value is a string and not undefined
+                />
+              )}
             />
             {errors.amount && <p className="text-sm text-red-500 mt-1">{errors.amount.message}</p>}
           </div>
