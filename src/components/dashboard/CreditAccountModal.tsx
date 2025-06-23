@@ -85,17 +85,24 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
         amount: data.amount,
         currency: account.currency || 'FCFA', // Use account's currency or default
         description: data.description,
-        reference_number: generateReferenceNumber(),
-        status: 'pending', // This is the default in `deposits` table, but explicit is good
+        reference_number: generateReferenceNumber(), // Ensure this is unique
+        status: 'pending',
         // deposit_method, receipt_url, admin_notes can be added if needed
       };
+      console.log("Submitting deposit payload:", depositPayload); // Added this log
 
-      const { error } = await supabase.from("deposits").insert([depositPayload]);
+      // Added .select() - this might help surface errors or ensure operation completion.
+      // If RLS prevents select, it might also cause an error if insert itself was fine.
+      const { error } = await supabase.from("deposits").insert([depositPayload]).select();
+
+      console.log("Supabase insert response - error:", error); // Added this log
 
       if (error) {
-        throw error;
+        console.error("Supabase insert error object:", error); // Log the full error object
+        throw error; // This will be caught by the catch block below
       }
 
+      // If no error, proceed to toast and cleanup
       toast({
         title: "Credit Request Submitted",
         description: "Your request to credit the account is pending admin approval.",
@@ -111,6 +118,8 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
         variant: "destructive",
       });
     } finally {
+       // This should always run, if it's not, the promise from try might be hanging
+       console.log("Setting isSubmitting to false in finally block");
       setIsSubmitting(false);
     }
   };
