@@ -2,131 +2,150 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Progress } from "@/components/ui/progress";
+// import { Progress } from "@/components/ui/progress"; // Progress not used directly for KPIs here
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DashboardHeader from "@/components/dashboard/DashboardHeader";
 import DashboardNav from "@/components/dashboard/DashboardNav";
-import RecentTransactions, { TransactionDisplayItem } from "@/components/dashboard/RecentTransactions";
+import RecentTransactions from "@/components/dashboard/RecentTransactions";
 import AccountSummary from "@/components/dashboard/AccountSummary";
-import { ArrowUpRight, CreditCard, DollarSign, PiggyBank, Plus, AlertCircle } from "lucide-react";
-import { Link, useSearchParams } from "react-router-dom"; // Imported useSearchParams
-import { useAuth } from "@/contexts/AuthContext";
+import { ArrowUpRight, CreditCard, /*DollarSign,*/ PiggyBank, Plus, AlertCircle } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext"; // To get user profile for fetching if needed
 import { supabase } from "@/integrations/supabase/client";
 import { Tables } from "@/integrations/supabase/types";
 
 // Define a type for Account, matching AccountSummaryProps and Supabase accounts table
-interface Account extends Tables<"accounts"> { // Inherit from Supabase type
-  // Ensure fields expected by AccountSummary are present if names differ,
-  // but they seem to align if we map account_number to accountNumber.
-  // For Dashboard.tsx usage, we can directly use Supabase Row type if mapping is handled at component prop level,
-  // or ensure this interface matches what AccountSummary expects.
-  // Let's ensure AccountSummary uses 'account_number' or we map it.
-  // For now, assume AccountSummary can be adapted or direct field names match after mapping.
-  accountNumber: string; // This is 'account_number' in Supabase
-}
+// interface Account extends Tables<"accounts"> { // Inherit from Supabase type
+//   accountNumber: string; // This is 'account_number' in Supabase - this interface might be redundant if AccountSummary adapts
+// }
 
 interface DashboardKPIs {
   totalBalance: number;
   monthlySpending: number;
-  savingsGoalProgress?: number; // Percentage
+  savingsGoalProgress?: number;
   savingsGoalAmount?: number;
   savingsCurrentAmount?: number;
 }
 
 const Dashboard = () => {
   const [activeTab, setActiveTab] = useState("overview");
-  const { profile, user } = useAuth(); // Assuming user object has id for Supabase queries
+  // const { profile, user } = useAuth(); // user from useAuth might be from its own state or localStorage via context
+  // For direct localStorage access for profile id:
+  const storedProfileString = localStorage.getItem('profile');
+  const localProfile = storedProfileString ? JSON.parse(storedProfileString) as Tables<'profiles'> : null;
 
-  // State for fetched data
-  const [accountsData, setAccountsData] = useState<Tables<"accounts">[]>([]); // Store raw Supabase account data
+
+  // State for data
+  const [accountsData, setAccountsData] = useState<Tables<"accounts">[]>([]);
   const [transactionsData, setTransactionsData] = useState<Tables<"transactions">[]>([]);
   const [kpis, setKpis] = useState<DashboardKPIs>({ totalBalance: 0, monthlySpending: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Removed dummyAccounts
-
   useEffect(() => {
     document.title = "Dashboard - CCMC Bank";
   }, []);
 
-  // Effect to sync activeTab with URL query parameter 'tab'
   const [searchParams] = useSearchParams();
   useEffect(() => {
     const tabFromQuery = searchParams.get("tab");
-    if (tabFromQuery === "accounts") {
-      setActiveTab("accounts");
-    } else { // Default to overview if tab is not 'accounts' or not present
-      setActiveTab("overview");
-    }
-  }, [searchParams]); // Removed setActiveTab from deps as it's a stable setter
+    setActiveTab(tabFromQuery === "accounts" ? "accounts" : "overview");
+  }, [searchParams]);
+
+  const calculateKPIs = (accData: Tables<"accounts">[], transData: Tables<"transactions">[]) => {
+    const totalBalanceFromData = accData.reduce((sum, acc) => sum + Number(acc.balance), 0);
+
+    const oneMonthAgo = new Date();
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+    const monthlySpendingFromData = transData
+      .filter(t => new Date(t.created_at) > oneMonthAgo && Number(t.amount) < 0)
+      .reduce((sum, t) => sum + Math.abs(Number(t.amount)), 0);
+
+    setKpis({
+      totalBalance: totalBalanceFromData,
+      monthlySpending: monthlySpendingFromData,
+    });
+  };
+
 
   useEffect(() => {
-    const fetchData = async () => {
-      if (!user || !profile?.id) {
+    const loadData = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      if (!localProfile?.id) {
+        setError("User profile not found. Cannot fetch data.");
         setIsLoading(false);
         return;
       }
 
-      setIsLoading(true);
-      setError(null);
+      // Try to load from LocalStorage first
+      const cachedAccounts = localStorage.getItem("dashboardAccounts");
+      const cachedTransactions = localStorage.getItem("dashboardTransactions");
 
+      if (cachedAccounts && cachedTransactions) {
+        try {
+          const parsedAccounts = JSON.parse(cachedAccounts) as Tables<"accounts">[];
+          const parsedTransactions = JSON.parse(cachedTransactions) as Tables<"transactions">[];
+          setAccountsData(parsedAccounts);
+          setTransactionsData(parsedTransactions);
+          calculateKPIs(parsedAccounts, parsedTransactions);
+          setIsLoading(false);
+          // console.log("Dashboard data loaded from localStorage");
+          // Optionally, you could still trigger a background refresh here
+          // For now, we'll just use cached data if available.
+          return;
+        } catch (e) {
+          console.error("Failed to parse cached dashboard data:", e);
+          // Clear corrupted cache
+          localStorage.removeItem("dashboardAccounts");
+          localStorage.removeItem("dashboardTransactions");
+        }
+      }
+
+      // If not in LocalStorage or parsing failed, fetch from Supabase
+      // console.log("Fetching dashboard data from Supabase...");
       try {
         // Fetch accounts
         const { data: fetchedAccounts, error: accountsError } = await supabase
           .from("accounts")
           .select("*")
-          .eq("user_id", profile.id); // Changed "customer_id" to "user_id"
+          .eq("user_id", localProfile.id);
 
         if (accountsError) throw accountsError;
         setAccountsData(fetchedAccounts || []);
-        const totalBalanceFromFetched = (fetchedAccounts || []).reduce((sum, acc) => sum + Number(acc.balance), 0);
+        localStorage.setItem("dashboardAccounts", JSON.stringify(fetchedAccounts || []));
 
         // Fetch transactions
-        const { data: transactions, error: transactionsError } = await supabase
+        const { data: fetchedTransactions, error: transactionsError } = await supabase
           .from("transactions")
           .select("*")
-          .eq("customer_id", profile.id)
+          // .eq("customer_id", localProfile.id) // Assuming customer_id in transactions is user_id from profiles
+          // Check if transactions table uses user_id or customer_id that maps to profiles.id
+          // For consistency with accounts, let's assume it's user_id or there's a direct link.
+          // If transactions are linked via account_id, then we'd need to fetch accounts first, then their transactions.
+          // The previous code used customer_id. Let's assume profile.id IS the customer_id for transactions.
+          .eq("customer_id", localProfile.id)
           .order("created_at", { ascending: false })
-          .limit(10);
+          .limit(10); // Consider if more transactions are needed for accurate monthly spending
 
         if (transactionsError) throw transactionsError;
-        setTransactionsData(transactions || []);
+        setTransactionsData(fetchedTransactions || []);
+        localStorage.setItem("dashboardTransactions", JSON.stringify(fetchedTransactions || []));
 
-        // Calculate Monthly Spending
-        const oneMonthAgo = new Date();
-        oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-
-        const monthlySpending = (transactions || [])
-          .filter(t => new Date(t.created_at) > oneMonthAgo && Number(t.amount) < 0)
-          .reduce((sum, t) => sum + Math.abs(Number(t.amount)), 0);
-
-        setKpis({
-          totalBalance: totalBalanceFromFetched,
-          monthlySpending: monthlySpending,
-        });
+        calculateKPIs(fetchedAccounts || [], fetchedTransactions || []);
 
       } catch (err) {
-        console.error("Error fetching dashboard data (friendly message):", err instanceof Error ? err.message : String(err));
-        console.error("Raw error object fetching dashboard data:", err); // Detailed log
-        // Attempt to stringify if it's a complex object, otherwise direct log is fine.
-        // try {
-        //   console.error("Raw error object (stringified):", JSON.stringify(err, null, 2));
-        // } catch (e) {
-        //   console.error("Could not stringify error object:", e);
-        // }
-        setError(err instanceof Error ? err.message : "An unknown error occurred during data fetch.");
+        console.error("Error fetching dashboard data:", err);
+        setError(err instanceof Error ? err.message : "An unknown error occurred.");
       } finally {
         setIsLoading(false);
       }
     };
 
-    fetchData();
-  }, [user, profile?.id]); // Rerun if user or profile.id changes
+    loadData();
+  }, [localProfile?.id]); // Rerun if profile.id changes (e.g. user logs out and in)
 
-  // No longer need to map to TransactionDisplayItem here,
-  // RecentTransactions component will handle it with raw transaction data.
-  // const displayTransactions: TransactionDisplayItem[] = transactionsData.map(t => ({ ... }));
 
   if (isLoading) {
     return (

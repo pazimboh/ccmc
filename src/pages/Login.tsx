@@ -1,33 +1,107 @@
 
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext"; // We'll use parts of AuthContext for now, or adapt it
 
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false); // This can be used for LocalStorage persistence duration
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const { refreshUserData } = useAuth(); // Keep refreshUserData for now
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    
-    // This is just a placeholder for the actual authentication logic
-    // that will be implemented later with Supabase
-    setTimeout(() => {
-      setIsLoading(false);
-      toast({
-        title: "Coming soon",
-        description: "Authentication will be implemented once connected to Supabase backend.",
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       });
-    }, 1500);
+
+      if (error) {
+        throw error;
+      }
+
+      if (data.user && data.session) {
+        // Store user and session in LocalStorage
+        localStorage.setItem("user", JSON.stringify(data.user));
+        localStorage.setItem("session", JSON.stringify(data.session));
+
+        // Fetch profile and role to store in LocalStorage as well
+        // This mimics part of what AuthContext did, but now we store it for ProtectedRoute/GuestRoute
+        const userId = data.user.id;
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single();
+
+        if (profileError) console.error('Error fetching profile for localStorage:', profileError.message);
+        if (profileData) localStorage.setItem('profile', JSON.stringify(profileData));
+
+        const { data: roleData, error: roleError } = await supabase
+          .from('user_roles')
+          .select('role')
+          .eq('user_id', userId)
+          .single();
+
+        if (roleError) console.error('Error fetching role for localStorage:', roleError.message);
+        if (roleData) localStorage.setItem('userRole', JSON.stringify(roleData));
+
+        // Call refreshUserData from AuthContext to update its internal state if still used elsewhere
+        // This part might be removed if AuthContext is fully deprecated
+        await refreshUserData();
+
+        toast({
+          title: "Login Successful",
+          description: "Welcome back!",
+        });
+
+        // Navigate based on role/approval status stored in localStorage
+        const storedProfile = profileData; // Use fetched data directly
+        const storedRole = roleData;
+
+        if (storedRole?.role === 'admin') {
+          navigate("/admin", { replace: true });
+        } else if (storedProfile?.status === 'approved') {
+          navigate("/dashboard", { replace: true });
+        } else {
+          // This case is for 'pending' or 'rejected' users.
+          // As per new requirement, 'pending' users should go to dashboard.
+          // 'rejected' users ideally shouldn't be able to log in, or be redirected to a specific page.
+          // For now, if not admin and not explicitly approved, they go to dashboard.
+          // The old logic sent them to /pending-approval
+          navigate("/dashboard", { replace: true });
+        }
+
+      } else {
+        // Should not happen if signInWithPassword is successful
+        toast({
+          title: "Login Failed",
+          description: "No user or session data returned.",
+          variant: "destructive",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Login Failed",
+        description: error.message || "An unexpected error occurred.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

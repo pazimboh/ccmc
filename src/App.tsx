@@ -13,7 +13,7 @@ import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import ApplyLoan from "./pages/ApplyLoan";
 import AdminDashboard from "./pages/AdminDashboard";
-import PendingApproval from "./pages/PendingApproval";
+// PendingApproval page is removed
 import Transfer from "./pages/Transfer"; // Renamed Payments to Transfer
 import Loans from "./pages/Loans";
 import Statements from "./pages/Statements";
@@ -34,7 +34,7 @@ const App = () => (
             <Route path="/" element={<GuestRoute><Index /></GuestRoute>} />
             <Route path="/auth" element={<GuestRoute><Auth /></GuestRoute>} />
             <Route path="/register" element={<GuestRoute><Register /></GuestRoute>} /> {/* Added register route */}
-            <Route path="/pending-approval" element={<PendingApproval />} />
+            {/* Removed /pending-approval route */}
             <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
             <Route path="/apply-loan" element={<ProtectedRoute><ApplyLoan /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />

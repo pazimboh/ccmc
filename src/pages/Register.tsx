@@ -78,9 +78,12 @@ const Register = () => {
         // This case happens if email confirmation is disabled or user is auto-confirmed
         toast({
           title: "Registration Successful!",
-          description: "Your account has been created and you are now logged in. Please wait for approval.",
+          description: "Your account has been created and you are now logged in. Welcome to the dashboard!",
         });
-        navigate('/pending-approval'); // New users go to pending approval
+        // New users go directly to dashboard as per new requirements
+        // The account will still be 'pending' in the backend and require admin approval for full features,
+        // but the user can access the dashboard.
+        navigate('/dashboard', { replace: true });
       } else {
         // Fallback, should ideally not happen if user and session are primary indicators
         toast({
