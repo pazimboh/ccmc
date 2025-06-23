@@ -178,17 +178,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Supabase auth state change listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
-        console.log('Auth state change event:', event, newSession?.user?.email);
+        console.log('Auth state change event:', event, newSession?.user?.email); // Existing log
         
         if (event === "SIGNED_IN" && newSession?.user) {
-          // This will be handled by login logic which calls refreshUserData
-          // but as a fallback or for external sign-ins (e.g. magic link):
-          if (!localStorage.getItem("user")) { // only refresh if local storage is not already set by login
-            await refreshUserData();
+          console.log('AuthContext: SIGNED_IN event triggered.');
+          // Login.tsx is responsible for populating LocalStorage on a fresh sign-in.
+          // AuthContext needs to ensure its state reflects this and isLoading is false.
+
+          const lsUser = localStorage.getItem("user");
+          const lsSession = localStorage.getItem("session");
+
+          if (lsUser && lsSession) {
+            console.log('AuthContext: User and session found in LocalStorage after SIGNED_IN. Updating context state.');
+            setUser(JSON.parse(lsUser));
+            setSession(JSON.parse(lsSession));
+            const lsProfile = localStorage.getItem("profile");
+            if (lsProfile) setProfile(JSON.parse(lsProfile)); else setProfile(null);
+            const lsUserRole = localStorage.getItem("userRole");
+            if (lsUserRole) setUserRole(JSON.parse(lsUserRole)); else setUserRole(null);
+
+            // It's good practice to ensure Supabase client has the latest session from the event
+            if (newSession) supabase.auth.setSession(newSession);
+
+          } else {
+            // This case implies that Login.tsx might not have completed LocalStorage population
+            // before this event fired, or an external sign-in happened without Login.tsx's direct involvement.
+            console.warn('AuthContext: SIGNED_IN event, but user/session not found immediately in LS. Calling refreshUserData as a fallback.');
+            await refreshUserData(); // refreshUserData handles setting context state, localStorage, and isLoading.
           }
+          setIsLoading(false); // Explicitly set isLoading to false after handling SIGNED_IN.
         } else if (event === "SIGNED_OUT") {
-          // SignOut function already clears local storage and state.
-          // This listener ensures consistency if sign-out happens e.g. in another tab.
+          console.log('AuthContext: SIGNED_OUT event triggered.');
+          // SignOut function (called by user action) already clears local storage and state.
+          // This listener block ensures consistency if sign-out happens e.g. in another tab or via direct Supabase call.
           localStorage.removeItem("user");
           localStorage.removeItem("session");
           localStorage.removeItem("profile");
