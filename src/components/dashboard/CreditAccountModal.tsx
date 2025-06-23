@@ -10,18 +10,17 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea"; // For description
+import { Textarea } from "@/components/ui/textarea";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Tables } from "@/integrations/supabase/types"; // Supabase generated types
+import { Tables } from "@/integrations/supabase/types";
 
-// Schema for the credit account form
 const creditAccountSchema = z.object({
-  amount: z.coerce // Use coerce for number conversion from string input
+  amount: z.coerce
     .number({ invalid_type_error: "Amount must be a number." })
     .positive("Amount must be positive.")
     .finite("Amount must be a finite number."),
@@ -33,14 +32,13 @@ type CreditAccountFormData = z.infer<typeof creditAccountSchema>;
 interface CreditAccountModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  account: Tables<'accounts'> | null; // The account to credit
-  onCreditRequestSubmitted: () => void; // Callback to potentially refresh transactions or give feedback
+  account: Tables<'accounts'> | null;
+  onCreditRequestSubmitted: () => void;
 }
 
-// Helper to generate a unique reference number (placeholder)
-// In a real app, this should be more robust or backend-generated
-function generateReferenceNumber(): string {
-  return `DEP-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+// Using the more unique reference number generation
+function generateModalReferenceNumber(): string {
+  return `DEP-MOD-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
 }
 
 export function CreditAccountModal({ open, onOpenChange, account, onCreditRequestSubmitted }: CreditAccountModalProps) {
@@ -56,83 +54,104 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
   } = useForm<CreditAccountFormData>({
     resolver: zodResolver(creditAccountSchema),
     defaultValues: {
-      amount: '', // Initialize with an empty string
+      amount: '',
       description: "",
     },
   });
 
   useEffect(() => {
-    // Reset form when the account changes or modal opens/closes with no account
     if (open && account) {
-      reset({ amount: undefined, description: "" });
+      reset({ amount: '', description: "" });
     } else if (!open) {
-      reset({ amount: undefined, description: "" });
+      reset({ amount: '', description: "" });
     }
   }, [open, account, reset]);
 
-  const onSubmit = (data: CreditAccountFormData) => { // Removed async here for now
+  const onSubmit = async (data: CreditAccountFormData) => {
     if (!user || !account) {
       toast({ title: "Error", description: "User or account information is missing.", variant: "destructive" });
       return;
     }
     setIsSubmitting(true);
-    console.log("FORM DATA:", data);
+    console.log("Form submitted. Data:", data);
+    console.log("Type of data.amount:", typeof data.amount, "Value:", data.amount);
 
-    const minimalDepositPayload = {
-      user_id: user.id,
-      account_id: account.id,
-      amount: data.amount, // Ensure this is a number
-      reference_number: `TESTREF-${Date.now()}`, // Simplified reference
-      // status: 'pending', // Rely on DB default if possible for this test
-      description: data.description || "Test deposit"
-    };
-    console.log("MINIMAL Submitting deposit payload:", minimalDepositPayload);
+    try {
+      const depositPayload = {
+        user_id: user.id,
+        account_id: account.id,
+        amount: Number(data.amount), // Ensure it's a number, though Zod coerce should handle it
+        currency: account.currency || 'FCFA',
+        description: data.description || "", // Send empty string if undefined/null
+        reference_number: generateModalReferenceNumber(),
+        // status: 'pending', // Relying on DB default for 'deposits' table
+      };
+      console.log("Submitting deposit payload to Supabase:", depositPayload);
 
-    supabase
-      .from("deposits")
-      .insert([minimalDepositPayload])
-      .then(({ data: insertData, error: insertError }) => {
-        console.log("Supabase INSERT THEN block reached.");
-        console.log("Insert Data:", insertData);
-        console.log("Insert Error:", insertError);
+      const { error } = await supabase.from("deposits").insert([depositPayload]).select(); // Keep .select() for now
 
-        if (insertError) {
-          console.error("Supabase insert detailed error:", insertError);
-          toast({
-            title: "Supabase Error",
-            description: insertError.message || "Failed to submit deposit due to database error.",
-            variant: "destructive",
-          });
-        } else {
-          toast({
-            title: "Credit Request Submitted (Simplified)",
-            description: "Your request is being processed.",
-          });
-          reset();
-          onOpenChange(false);
-          onCreditRequestSubmitted();
-        }
-      })
-      .catch((catchError: any) => {
-        // This catches errors from the promise chain itself (e.g., network errors before Supabase responds)
-        console.error("Supabase CATCH block error:", catchError);
-        toast({
-          title: "Submission Failed (Catch)",
-          description: catchError.message || "An unexpected error occurred during submission.",
-          variant: "destructive",
-        });
-      })
-      .finally(() => {
-        console.log("FINALLY block reached. Setting isSubmitting to false.");
-        setIsSubmitting(false);
+      console.log("Supabase insert response. Error:", error);
+
+      if (error) {
+        console.error("Supabase insert error object:", error);
+        throw error;
+      }
+
+      toast({
+        title: "Credit Request Submitted",
+        description: "Your request to credit the account is pending admin approval.",
       });
+      reset();
+      onOpenChange(false);
+      onCreditRequestSubmitted();
+    } catch (error: any) {
+      console.error("Error in onSubmit for credit request:", error);
+      toast({
+        title: "Error Submitting Request",
+        description: error.message || "Could not submit your credit request. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      console.log("onSubmit finally block. Setting isSubmitting to false.");
+      setIsSubmitting(false);
+    }
   };
 
-  if (!account) return null; // Don't render if no account is provided
+  const handleTestInsert = async () => { // Keeping this for sanity checks if needed
+    console.log("Attempting direct Supabase test insert...");
+    if (!user || !account) {
+      console.error("Test Insert: User or account missing");
+      alert("Test Insert: User or account missing. Cannot perform test.");
+      return;
+    }
+    try {
+      const { data: testData, error: testError } = await supabase.from('deposits').insert({
+        user_id: user.id,
+        account_id: account.id,
+        amount: 1.00,
+        reference_number: `TESTDIRECT-${Date.now()}-${Math.random().toString(36).substring(2,7)}`,
+        description: "Direct Supabase Client Test from Modal",
+        currency: account.currency || 'FCFA',
+      }).select();
+
+      if (testError) {
+        console.error('Direct Supabase Test Insert ERROR:', testError);
+        alert('Direct Test Failed: ' + testError.message);
+      } else {
+        console.log('Direct Supabase Test Insert SUCCESS:', testData);
+        alert('Direct Test Succeeded! Check the console and database.');
+      }
+    } catch (e) {
+      console.error('Direct Supabase Test Insert CATCH:', e);
+      alert('Direct Test CATCH: ' + (e as any).message);
+    }
+  };
+
+  if (!account) return null;
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => {
-      if (!isOpen) reset(); // Reset form if dialog is closed via 'x' or overlay click
+      if (!isOpen) reset();
       onOpenChange(isOpen);
     }}>
       <DialogContent className="sm:max-w-[425px]">
@@ -155,7 +174,7 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
                   type="number"
                   placeholder="e.g., 50000"
                   {...field}
-                  value={field.value === undefined || field.value === null ? '' : String(field.value)} // Ensure value is a string and not undefined
+                  value={field.value === undefined || field.value === null ? '' : String(field.value)}
                 />
               )}
             />
@@ -167,7 +186,7 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
             <Controller
               name="description"
               control={control}
-              render={({ field }) => <Textarea id="description" placeholder="e.g., Funds from savings, Monthly allowance" {...field} />}
+              render={({ field }) => <Textarea id="description" placeholder="e.g., Funds from savings, Monthly allowance" {...field} value={field.value || ''} />}
             />
             {errors.description && <p className="text-sm text-red-500 mt-1">{errors.description.message}</p>}
           </div>
@@ -176,11 +195,14 @@ export function CreditAccountModal({ open, onOpenChange, account, onCreditReques
             Note: This credit request will be processed by an administrator. Funds will appear in your account upon approval.
           </p>
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => { reset(); onOpenChange(false); }}>Cancel</Button>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Submitting..." : "Submit Credit Request"}
-            </Button>
+          <DialogFooter className="sm:justify-between">
+            <Button type="button" variant="destructive" onClick={handleTestInsert} className="mr-auto">Test Direct Insert</Button>
+            <div className="flex space-x-2">
+              <Button type="button" variant="outline" onClick={() => { reset(); onOpenChange(false); }}>Cancel</Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? "Submitting..." : "Submit Credit Request"}
+              </Button>
+            </div>
           </DialogFooter>
         </form>
       </DialogContent>

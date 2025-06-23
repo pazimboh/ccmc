@@ -349,13 +349,7 @@ const Dashboard = () => {
                               <p className="text-3xl font-bold">{Number(account.balance).toLocaleString()} FCFA</p>
                             </div>
                             <div className="space-x-2">
-                              {/* TODO: The "Transfer" button here could also use navigate('/transfer', { state: { fromAccount: account } }) */}
-                              <Button
-                                size="sm"
-                                onClick={() => navigate('/transfer', { state: { fromAccount: account } })}
-                              >
-                                Transfer
-                              </Button>
+                              {/* "Transfer" button removed from here */}
                               <Button
                                 size="sm"
                                 variant="outline"
